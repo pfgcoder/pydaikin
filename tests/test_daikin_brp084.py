@@ -1,11 +1,13 @@
 """Verify that init() calls the expected set of endpoints for firmware 2.8.0 devices."""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, ClientTimeout
 import pytest
 import pytest_asyncio
+from tenacity import wait_none
 
 from pydaikin.daikin_brp084 import DaikinBRP084
 from pydaikin.exceptions import DaikinException
@@ -1974,3 +1976,106 @@ def test_indoor_temp_tolerates_missing_sensor(response, expected):
         )
         == expected
     )
+
+
+def _minimal_status_response():
+    """Smallest multireq reply that update_status accepts."""
+    return {
+        "responses": [
+            {
+                "fr": "/dsiot/edge/adr_0100.dgc_status",
+                "pc": {
+                    "pn": "dgc_status",
+                    "pch": [
+                        {
+                            "pn": "e_1002",
+                            "pch": [
+                                {"pn": "e_A002", "pch": [{"pn": "p_01", "pv": "01"}]},
+                                {
+                                    "pn": "e_3001",
+                                    "pch": [
+                                        {"pn": "p_01", "pv": "0200"},
+                                        {"pn": "p_02", "pv": "32"},
+                                        {"pn": "p_09", "pv": "0A00"},
+                                        {"pn": "p_05", "pv": "000000"},
+                                        {"pn": "p_06", "pv": "000000"},
+                                    ],
+                                },
+                                {
+                                    "pn": "e_A00B",
+                                    "pch": [
+                                        {"pn": "p_01", "pv": "18"},
+                                        {"pn": "p_02", "pv": "3c"},
+                                    ],
+                                },
+                            ],
+                        }
+                    ],
+                },
+                "rsc": 2000,
+            },
+            {
+                "fr": "/dsiot/edge.adp_i",
+                "pc": {"pn": "adp_i", "pch": [{"pn": "mac", "pv": "112233445566"}]},
+                "rsc": 2000,
+            },
+        ]
+    }
+
+
+@pytest.fixture
+def fast_timeouts(monkeypatch):
+    """Shrink the request timeout and skip the back-off so retries run quickly."""
+    monkeypatch.setattr(DaikinBRP084, "HTTP_TIMEOUT", ClientTimeout(total=0.1))
+    monkeypatch.setattr(DaikinBRP084._get_resource.retry, "wait", wait_none())
+
+
+async def _slow_reply(request):
+    """Answer only after the (shrunk) request timeout has expired."""
+    await asyncio.sleep(0.5)
+    return json.dumps({})
+
+
+@pytest.mark.asyncio
+async def test_update_status_retries_after_timeout(
+    aresponses, client_session, fast_timeouts
+):
+    """A request that times out is retried instead of failing the update."""
+    aresponses.add(
+        path_pattern="/dsiot/multireq", method_pattern="POST", response=_slow_reply
+    )
+    aresponses.add(
+        path_pattern="/dsiot/multireq",
+        method_pattern="POST",
+        response=aresponses.Response(
+            status=200,
+            text=json.dumps(_minimal_status_response()),
+            headers={"Content-Type": "application/json"},
+        ),
+    )
+
+    device = DaikinBRP084("192.0.2.10", session=client_session)
+    await device.update_status()
+
+    assert device.values.get("mac") == "112233445566"
+    assert device.values.get("mode") == "cool"
+
+
+@pytest.mark.asyncio
+async def test_update_status_error_names_device_and_timeout(
+    aresponses, client_session, fast_timeouts
+):
+    """When every attempt times out, the error says which device and why."""
+    for _ in range(3):
+        aresponses.add(
+            path_pattern="/dsiot/multireq",
+            method_pattern="POST",
+            response=_slow_reply,
+        )
+
+    device = DaikinBRP084("192.0.2.10", session=client_session)
+    with pytest.raises(
+        DaikinException,
+        match="Failed to communicate with device 192.0.2.10: TimeoutError",
+    ):
+        await device.update_status()
