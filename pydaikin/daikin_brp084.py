@@ -7,7 +7,15 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, ClientTimeout
+from aiohttp.client_exceptions import ClientOSError, ServerDisconnectedError
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
 from .daikin_base import Appliance
 from .exceptions import DaikinException
@@ -73,6 +81,11 @@ class DaikinRequest:
 # pylint: disable=abstract-method,too-many-public-methods
 class DaikinBRP084(Appliance):
     """Daikin class for BRP devices with firmware 2.8.0."""
+
+    # These adapters sometimes take longer than 5 seconds to answer or drop a
+    # request, so allow a longer wait and retry (3 x 15s stays well inside
+    # Home Assistant's 120s polling interval).
+    HTTP_TIMEOUT = ClientTimeout(total=15)
 
     # Centralized API paths for easier maintenance and better organization
     E_1002_PATH = [
@@ -436,8 +449,14 @@ class DaikinBRP084(Appliance):
             if not response or 'responses' not in response:
                 raise DaikinException("Invalid response from device")
         except Exception as e:
-            _LOGGER.info("Error communicating with device: %s", e)
-            raise DaikinException(f"Failed to communicate with device: {e}") from e
+            # A timeout has an empty message, so fall back to the exception type
+            reason = str(e) or type(e).__name__
+            _LOGGER.info(
+                "Error communicating with device %s: %s", self.device_ip, reason
+            )
+            raise DaikinException(
+                f"Failed to communicate with device {self.device_ip}: {reason}"
+            ) from e
 
         # Extract basic info
         try:
@@ -606,8 +625,17 @@ class DaikinBRP084(Appliance):
             except DaikinException:
                 pass
 
+    @retry(
+        reraise=True,
+        wait=wait_random_exponential(multiplier=0.2, max=1.2),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(
+            (TimeoutError, ClientOSError, ServerDisconnectedError)
+        ),
+        before_sleep=before_sleep_log(_LOGGER, logging.DEBUG),
+    )
     async def _get_resource(self, path: str, params: Optional[Dict] = None):
-        """Make the HTTP request to the device."""
+        """Make the HTTP request to the device, retrying transient failures."""
         _LOGGER.debug(
             "Calling: %s %s",
             self.url,
@@ -621,7 +649,7 @@ class DaikinBRP084(Appliance):
                     json=params,
                     headers=self.headers,
                     ssl=self.ssl_context,
-                    timeout=5,  # Add a timeout to avoid hanging
+                    timeout=self.HTTP_TIMEOUT,
                 ) as response:
                     response.raise_for_status()
                     return await response.json()
