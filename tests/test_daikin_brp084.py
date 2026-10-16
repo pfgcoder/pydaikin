@@ -1901,7 +1901,7 @@ async def test_update_status_error_names_device_and_timeout(
     aresponses, client_session, fast_timeouts
 ):
     """When every attempt times out, the error says which device and why."""
-    for _ in range(3):
+    for _ in range(DaikinBRP084.HTTP_ATTEMPTS):
         aresponses.add(
             path_pattern="/dsiot/multireq",
             method_pattern="POST",

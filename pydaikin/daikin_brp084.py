@@ -82,10 +82,12 @@ class DaikinRequest:
 class DaikinBRP084(Appliance):
     """Daikin class for BRP devices with firmware 2.8.0."""
 
-    # These adapters sometimes take longer than 5 seconds to answer or drop a
-    # request, so allow a longer wait and retry (3 x 15s stays well inside
-    # Home Assistant's 120s polling interval).
-    HTTP_TIMEOUT = ClientTimeout(total=15)
+    # These adapters sometimes take longer than 5 seconds to answer, drop a
+    # request, or stop answering for a minute or more while staying on Wi-Fi,
+    # so keep retrying. 10 attempts of 10s plus the short back-off is about
+    # 110s, just inside Home Assistant's 120s polling interval.
+    HTTP_TIMEOUT = ClientTimeout(total=10)
+    HTTP_ATTEMPTS = 10
 
     # Centralized API paths for easier maintenance and better organization
     E_1002_PATH = [
@@ -628,7 +630,7 @@ class DaikinBRP084(Appliance):
     @retry(
         reraise=True,
         wait=wait_random_exponential(multiplier=0.2, max=1.2),
-        stop=stop_after_attempt(3),
+        stop=stop_after_attempt(HTTP_ATTEMPTS),
         retry=retry_if_exception_type(
             (TimeoutError, ClientOSError, ServerDisconnectedError)
         ),
