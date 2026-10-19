@@ -1948,3 +1948,23 @@ def test_wait_before_retry(error, low, high):
     retry_state.set_exception((type(error), error, None))
 
     assert low <= _wait_before_retry(retry_state) <= high
+
+
+@pytest.mark.asyncio
+async def test_update_status_entry_without_pc_raises_daikin_exception():
+    """A reply entry with no "pc" raises DaikinException, not KeyError.
+
+    Home Assistant's Daikin integration turns DaikinException into
+    ConfigEntryNotReady and retries the setup. A KeyError fails the setup, and
+    Home Assistant does not retry it.
+    """
+    response = _minimal_status_response()
+    for entry in response["responses"]:
+        if entry["fr"] == "/dsiot/edge/adr_0100.dgc_status":
+            del entry["pc"]
+
+    device = DaikinBRP084("192.0.2.10", session=MagicMock())
+    device._get_resource = AsyncMock(return_value=response)
+
+    with pytest.raises(DaikinException, match="not found"):
+        await device.update_status()

@@ -376,7 +376,9 @@ class DaikinBRP084(Appliance):
     @staticmethod
     def find_value_by_pn(data: dict, fr: str, *keys):
         """Find values in nested response data."""
-        data = [x['pc'] for x in data['responses'] if x['fr'] == fr]
+        # An entry the adapter could not answer has no "pc". Skip it so a lookup
+        # in it raises DaikinException below instead of KeyError.
+        data = [x["pc"] for x in data["responses"] if x["fr"] == fr and "pc" in x]
 
         while keys:
             current_key = keys[0]
