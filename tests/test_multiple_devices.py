@@ -2,6 +2,7 @@ import logging
 
 from aiohttp import web
 import pytest
+from tenacity import stop_after_attempt
 
 from pydaikin import daikin_base
 from pydaikin.daikin_airbase import DaikinAirBase
@@ -262,6 +263,11 @@ async def test_device_factory(device_type, expected_class, password, monkeypatch
     base_url = await server.start()
     port = server.site.port
     device_id = base_url.replace("http://", "")
+
+    # The factory tries BRP084 first. Unless it is pointed at the fake server
+    # below, it connects to port 80, where nothing is listening, so give up
+    # after one attempt instead of retrying for HTTP_RETRY_SECONDS.
+    monkeypatch.setattr(DaikinBRP084._get_resource.retry, "stop", stop_after_attempt(1))
 
     original_appliance_init = daikin_base.Appliance.__init__
 

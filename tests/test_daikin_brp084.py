@@ -5,11 +5,12 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 from aiohttp import ClientSession, ClientTimeout
+from aiohttp.client_exceptions import ClientOSError
 import pytest
 import pytest_asyncio
-from tenacity import wait_none
+from tenacity import RetryCallState, stop_after_delay, wait_none
 
-from pydaikin.daikin_brp084 import DaikinBRP084
+from pydaikin.daikin_brp084 import DaikinBRP084, _wait_before_retry
 from pydaikin.exceptions import DaikinException
 
 
@@ -1860,9 +1861,10 @@ def _minimal_status_response():
 
 @pytest.fixture
 def fast_timeouts(monkeypatch):
-    """Shrink the request timeout and skip the back-off so retries run quickly."""
+    """Shrink the request timeout and retry window and skip the back-off."""
     monkeypatch.setattr(DaikinBRP084, "HTTP_TIMEOUT", ClientTimeout(total=0.1))
     monkeypatch.setattr(DaikinBRP084._get_resource.retry, "wait", wait_none())
+    monkeypatch.setattr(DaikinBRP084._get_resource.retry, "stop", stop_after_delay(0.5))
 
 
 async def _slow_reply(request):
@@ -1901,12 +1903,12 @@ async def test_update_status_error_names_device_and_timeout(
     aresponses, client_session, fast_timeouts
 ):
     """When every attempt times out, the error says which device and why."""
-    for _ in range(DaikinBRP084.HTTP_ATTEMPTS):
-        aresponses.add(
-            path_pattern="/dsiot/multireq",
-            method_pattern="POST",
-            response=_slow_reply,
-        )
+    aresponses.add(
+        path_pattern="/dsiot/multireq",
+        method_pattern="POST",
+        response=_slow_reply,
+        repeat=aresponses.INFINITY,
+    )
 
     device = DaikinBRP084("192.0.2.10", session=client_session)
     with pytest.raises(
@@ -1914,3 +1916,35 @@ async def test_update_status_error_names_device_and_timeout(
         match="Failed to communicate with device 192.0.2.10: TimeoutError",
     ):
         await device.update_status()
+
+
+@pytest.mark.asyncio
+async def test_update_status_keeps_retrying_connection_errors(fast_timeouts):
+    """Failures that come back straight away are retried until the window ends.
+
+    Retries used to stop after 10 attempts, however quickly they failed.
+    """
+    response = MagicMock()
+    response.json = AsyncMock(return_value=_minimal_status_response())
+    reply = MagicMock()
+    reply.__aenter__.return_value = response
+    session = MagicMock()
+    session.post.side_effect = [ClientOSError()] * 12 + [reply]
+
+    device = DaikinBRP084("192.0.2.10", session=session)
+    await device.update_status()
+
+    assert session.post.call_count == 13
+    assert device.values.get("mode") == "cool"
+
+
+@pytest.mark.parametrize(
+    ("error", "low", "high"),
+    [(TimeoutError(), 0, 1), (ClientOSError(), 1, 2)],
+)
+def test_wait_before_retry(error, low, high):
+    """Only a failure that came back straight away waits 1-2s."""
+    retry_state = RetryCallState(DaikinBRP084._get_resource.retry, None, (), {})
+    retry_state.set_exception((type(error), error, None))
+
+    assert low <= _wait_before_retry(retry_state) <= high

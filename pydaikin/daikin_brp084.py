@@ -10,10 +10,12 @@ from typing import Any, Dict, List, Optional
 from aiohttp import ClientSession, ClientTimeout
 from aiohttp.client_exceptions import ClientOSError, ServerDisconnectedError
 from tenacity import (
+    RetryCallState,
     before_sleep_log,
     retry,
     retry_if_exception_type,
-    stop_after_attempt,
+    stop_after_delay,
+    wait_random,
     wait_random_exponential,
 )
 
@@ -21,6 +23,20 @@ from .daikin_base import Appliance
 from .exceptions import DaikinException
 
 _LOGGER = logging.getLogger(__name__)
+
+_WAIT_AFTER_TIMEOUT = wait_random_exponential(multiplier=0.2, max=1.2)
+_WAIT_AFTER_ERROR = wait_random(min=1, max=2)
+
+
+def _wait_before_retry(retry_state: RetryCallState) -> float:
+    """Wait 1-2s after a failure that came back straight away.
+
+    A timed-out attempt has already waited for HTTP_TIMEOUT, so it only gets
+    the short back-off.
+    """
+    if isinstance(retry_state.outcome.exception(), TimeoutError):
+        return _WAIT_AFTER_TIMEOUT(retry_state)
+    return _WAIT_AFTER_ERROR(retry_state)
 
 
 @dataclass
@@ -83,11 +99,12 @@ class DaikinBRP084(Appliance):
     """Daikin class for BRP devices with firmware 2.8.0."""
 
     # These adapters sometimes take longer than 5 seconds to answer, drop a
-    # request, or stop answering for a minute or more while staying on Wi-Fi,
-    # so keep retrying. 10 attempts of 10s plus the short back-off is about
-    # 110s, just inside Home Assistant's 120s polling interval.
+    # request, or stop answering for a minute or more, so keep retrying for
+    # HTTP_RETRY_SECONDS. The last attempt can start just before then and run
+    # for the full HTTP_TIMEOUT, about 110s in all, just inside Home
+    # Assistant's 120s polling interval.
     HTTP_TIMEOUT = ClientTimeout(total=10)
-    HTTP_ATTEMPTS = 10
+    HTTP_RETRY_SECONDS = 100
 
     # Centralized API paths for easier maintenance and better organization
     E_1002_PATH = [
@@ -629,8 +646,8 @@ class DaikinBRP084(Appliance):
 
     @retry(
         reraise=True,
-        wait=wait_random_exponential(multiplier=0.2, max=1.2),
-        stop=stop_after_attempt(HTTP_ATTEMPTS),
+        wait=_wait_before_retry,
+        stop=stop_after_delay(HTTP_RETRY_SECONDS),
         retry=retry_if_exception_type(
             (TimeoutError, ClientOSError, ServerDisconnectedError)
         ),
