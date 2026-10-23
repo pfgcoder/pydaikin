@@ -1,6 +1,7 @@
 """Verify that init() calls the expected set of endpoints for firmware 2.8.0 devices."""
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -2122,3 +2123,31 @@ def test_wait_before_retry(error, attempt, low, high):
     retry_state.set_exception((type(error), error, None))
 
     assert low <= _wait_before_retry(retry_state) <= high
+
+
+@pytest.mark.asyncio
+async def test_requests_to_one_adapter_run_one_at_a_time():
+    """A second request waits for the first, so the adapter never gets two."""
+    in_flight = 0
+    most_in_flight = 0
+    response = MagicMock()
+    response.json = AsyncMock(return_value={})
+
+    @asynccontextmanager
+    async def post(*args, **kwargs):
+        nonlocal in_flight, most_in_flight
+        in_flight += 1
+        most_in_flight = max(most_in_flight, in_flight)
+        try:
+            await asyncio.sleep(0.01)
+            yield response
+        finally:
+            in_flight -= 1
+
+    session = MagicMock()
+    session.post = post
+    device = DaikinBRP084("192.0.2.10", session=session)
+
+    await asyncio.gather(*(device._get_resource("") for _ in range(3)))
+
+    assert most_in_flight == 1
