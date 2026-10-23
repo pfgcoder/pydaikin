@@ -74,6 +74,10 @@ class DaikinRequest:
 class DaikinBRP084(Appliance):
     """Daikin class for BRP devices with firmware 2.8.0."""
 
+    # One request at a time, as for BRP069, so a poll and a command don't
+    # reach the adapter together.
+    MAX_CONCURRENT_REQUESTS = 1
+
     # Centralized API paths for easier maintenance and better organization
     E_1002_PATH = [
         "/dsiot/edge/adr_0100.dgc_status",
