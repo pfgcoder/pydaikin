@@ -2104,12 +2104,21 @@ async def test_update_status_keeps_retrying_connection_errors(fast_timeouts):
 
 
 @pytest.mark.parametrize(
-    ("error", "low", "high"),
-    [(TimeoutError(), 0, 1), (ClientOSError(), 1, 2)],
+    ("error", "attempt", "low", "high"),
+    [
+        (TimeoutError(), 1, 2, 2),
+        (TimeoutError(), 2, 4, 4),
+        (TimeoutError(), 3, 8, 8),
+        (TimeoutError(), 4, 16, 16),
+        (TimeoutError(), 6, 16, 16),
+        (ClientOSError(), 1, 1, 2),
+        (ClientOSError(), 6, 1, 2),
+    ],
 )
-def test_wait_before_retry(error, low, high):
-    """Only a failure that came back straight away waits 1-2s."""
+def test_wait_before_retry(error, attempt, low, high):
+    """Timeouts back off 2, 4, 8 then 16s; other failures wait 1-2s."""
     retry_state = RetryCallState(DaikinBRP084._get_resource.retry, None, (), {})
+    retry_state.attempt_number = attempt
     retry_state.set_exception((type(error), error, None))
 
     assert low <= _wait_before_retry(retry_state) <= high
