@@ -336,6 +336,8 @@ class DaikinBRP084(Appliance):
         negative (two's complement), e.g. a sub-zero outdoor temperature.
         """
         raw = bytes.fromhex(value)
+        if not raw:
+            raise ValueError("Empty value")  # rather than reading as 0
         return int.from_bytes(raw, byteorder='little', signed=signed)
 
     @classmethod
@@ -449,7 +451,7 @@ class DaikinBRP084(Appliance):
         divisor: int = 2,
         decoder: Optional[Callable[[str, int], float]] = None,
     ) -> str:
-        """Extract a temperature value, returning '--' if missing or null.
+        """Extract a temperature value, returning '--' if missing, null or blank.
 
         Decodes as a little-endian signed value so sub-zero outdoor readings
         (two's complement, e.g. a negative outdoor temperature) are handled
@@ -467,7 +469,7 @@ class DaikinBRP084(Appliance):
             raw = self.find_value_by_pn(response, *self.get_path(path_key))
             if raw is not None:
                 return str(decode(raw, divisor))
-        except DaikinException:
+        except (DaikinException, ValueError):  # ValueError: not hex
             pass
         return "--"
 
@@ -542,7 +544,7 @@ class DaikinBRP084(Appliance):
                         )
                     )
                 )
-            except (DaikinException, TypeError):  # TypeError: null value
+            except (DaikinException, TypeError, ValueError):  # null or not hex
                 self.values['hhum'] = "--"
 
             # Get target temperature
@@ -556,7 +558,7 @@ class DaikinBRP084(Appliance):
                             )
                         )
                     )
-                except (DaikinException, TypeError):  # TypeError: null value
+                except (DaikinException, TypeError, ValueError):  # null or not hex
                     self.values['stemp'] = "--"
             else:
                 self.values['stemp'] = "--"
@@ -663,14 +665,17 @@ class DaikinBRP084(Appliance):
         if raw is not None:
             self.values["compressor_running"] = "1" if raw == "01" else "0"
 
-        # Outdoor-unit compressor temperature.
+        # Outdoor-unit compressor temperature. A bad reading shows as unknown
+        # rather than keeping the last one.
         try:
             self.values['cmp_temp'] = str(
                 self.hex_le_to_temp(
                     self.find_value_by_pn(response, *self.get_path("compressor_temp"))
                 )
             )
-        except (DaikinException, TypeError):  # TypeError: null value
+        except (TypeError, ValueError):  # null or not hex
+            self.values['cmp_temp'] = "--"
+        except DaikinException:
             pass
 
         # Decoded model strings.
