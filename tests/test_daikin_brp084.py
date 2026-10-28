@@ -5,10 +5,15 @@ from contextlib import asynccontextmanager
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-from aiohttp import ClientPayloadError, ClientSession, ClientTimeout
+from aiohttp import (
+    ClientPayloadError,
+    ClientSession,
+    ClientTimeout,
+    ServerDisconnectedError,
+)
 import pytest
 import pytest_asyncio
-from tenacity import wait_none
+from tenacity import wait_fixed, wait_none
 
 from pydaikin.daikin_brp084 import DaikinAttribute, DaikinBRP084, DaikinRequest
 from pydaikin.exceptions import DaikinException
@@ -2028,7 +2033,7 @@ def _minimal_status_response():
 def fast_timeouts(monkeypatch):
     """Shrink the request timeout and skip the back-off so retries run quickly."""
     monkeypatch.setattr(DaikinBRP084, "HTTP_TIMEOUT", ClientTimeout(total=0.1))
-    monkeypatch.setattr(DaikinBRP084._get_resource.retry, "wait", wait_none())
+    monkeypatch.setattr(DaikinBRP084._do_get_resource.retry, "wait", wait_none())
 
 
 async def _slow_reply(request):
@@ -2233,7 +2238,7 @@ def test_serialize_adds_to_existing_container_that_is_not_last():
 @pytest.mark.asyncio
 async def test_request_retried_after_reply_is_cut_off(monkeypatch):
     """A reply that breaks off part-way through is retried."""
-    monkeypatch.setattr(DaikinBRP084._get_resource.retry, "wait", wait_none())
+    monkeypatch.setattr(DaikinBRP084._do_get_resource.retry, "wait", wait_none())
     response = MagicMock()
     response.json = AsyncMock(
         side_effect=[ClientPayloadError("Response payload is not completed"), {}]
@@ -2249,3 +2254,30 @@ async def test_request_retried_after_reply_is_cut_off(monkeypatch):
 
     assert await device._get_resource("") == {}
     assert response.json.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_retrying_request_is_not_overtaken(monkeypatch):
+    """A later request waits for an earlier one's retries, so it can't be undone."""
+    monkeypatch.setattr(DaikinBRP084._do_get_resource.retry, "wait", wait_fixed(0.05))
+    sent = []
+    response = MagicMock()
+    response.json = AsyncMock(return_value={})
+
+    @asynccontextmanager
+    async def post(*args, **kwargs):
+        sent.append(kwargs["json"]["name"])
+        if sent == ["older"]:
+            raise ServerDisconnectedError()
+        yield response
+
+    session = MagicMock()
+    session.post = post
+    device = DaikinBRP084("192.0.2.10", session=session)
+
+    older = asyncio.create_task(device._get_resource("", params={"name": "older"}))
+    await asyncio.sleep(0.01)  # the older request has failed and is waiting to retry
+    await device._get_resource("", params={"name": "newer"})
+    await older
+
+    assert sent == ["older", "older", "newer"]

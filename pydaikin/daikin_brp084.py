@@ -664,6 +664,16 @@ class DaikinBRP084(Appliance):
             except DaikinException:
                 pass
 
+    async def _get_resource(self, path: str, params: Optional[Dict] = None):
+        """Make the HTTP request to the device, retrying transient failures.
+
+        The lock is held across the retries, so a later request waits until
+        this one succeeds or gives up. Otherwise a command still retrying
+        could land after a newer one and undo it.
+        """
+        async with self.request_semaphore:
+            return await self._do_get_resource(path, params)
+
     @retry(
         reraise=True,
         wait=wait_random_exponential(multiplier=0.2, max=1.2),
@@ -673,8 +683,8 @@ class DaikinBRP084(Appliance):
         ),
         before_sleep=before_sleep_log(_LOGGER, logging.DEBUG),
     )
-    async def _get_resource(self, path: str, params: Optional[Dict] = None):
-        """Make the HTTP request to the device, retrying transient failures."""
+    async def _do_get_resource(self, path: str, params: Optional[Dict] = None):
+        """Make one attempt at the HTTP request."""
         _LOGGER.debug(
             "Calling: %s %s",
             self.url,
@@ -682,16 +692,15 @@ class DaikinBRP084(Appliance):
         )
 
         try:
-            async with self.request_semaphore:
-                async with self.session.post(
-                    self.url,
-                    json=params,
-                    headers=self.headers,
-                    ssl=self.ssl_context,
-                    timeout=self.HTTP_TIMEOUT,
-                ) as response:
-                    response.raise_for_status()
-                    return await response.json()
+            async with self.session.post(
+                self.url,
+                json=params,
+                headers=self.headers,
+                ssl=self.ssl_context,
+                timeout=self.HTTP_TIMEOUT,
+            ) as response:
+                response.raise_for_status()
+                return await response.json()
         except Exception as e:
             _LOGGER.debug("Error in _get_resource: %s", e)
             raise
