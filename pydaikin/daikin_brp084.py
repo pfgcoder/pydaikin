@@ -517,8 +517,9 @@ class DaikinBRP084(Appliance):
             # Get mode
             mode_value = self.find_value_by_pn(response, *self.get_path("mode"))
 
-            self.values['pow'] = "0" if is_off else "1"
+            # Mode first, so an unknown mode leaves pow as it was.
             self.values['mode'] = 'off' if is_off else self._decode_mode(mode_value)
+            self.values['pow'] = "0" if is_off else "1"
 
             # Get temperatures. Outdoor temp is decoded as a little-endian
             # signed value (see _safe_hex_temp) to handle sub-zero readings, and

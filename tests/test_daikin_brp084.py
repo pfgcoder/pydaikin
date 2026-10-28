@@ -2186,12 +2186,16 @@ def test_hex_le_to_temp_blank_raises():
 async def test_update_status_unknown_mode_raises_daikin_exception(mode_value):
     """An unknown or null mode raises DaikinException, not KeyError."""
     device = DaikinBRP084("192.0.2.10", session=MagicMock())
+    device.values["pow"] = "0"
+    device.values["mode"] = "off"
     response = _minimal_status_response()
     _set_pv(response, device.get_path("mode"), mode_value)
     device._get_resource = AsyncMock(return_value=response)
 
     with pytest.raises(DaikinException, match="Unknown mode"):
         await device.update_status()
+
+    assert device.values.get("pow") == "0"
 
 
 def test_find_value_by_pn_missing_value_raises_daikin_exception():
