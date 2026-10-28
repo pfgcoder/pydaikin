@@ -2192,3 +2192,17 @@ def test_find_value_by_pn_missing_value_raises_daikin_exception():
 
     with pytest.raises(DaikinException, match="Key mac has no value"):
         DaikinBRP084.find_value_by_pn(response, "/dsiot/edge.adp_i", "adp_i", "mac")
+
+
+@pytest.mark.asyncio
+async def test_set_error_names_device():
+    """When a command fails, the error says which device and why."""
+    device = DaikinBRP084("192.0.2.10", session=MagicMock())
+    device.values["mode"] = "cool"
+    device._get_resource = AsyncMock(side_effect=TimeoutError())
+
+    with pytest.raises(
+        DaikinException,
+        match="Failed to send command to device 192.0.2.10: TimeoutError",
+    ):
+        await device.set({"stemp": "22"})

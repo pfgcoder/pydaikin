@@ -915,7 +915,14 @@ class DaikinBRP084(Appliance):
         if requests:
             request_payload = DaikinRequest(requests).serialize()
             _LOGGER.debug("Sending request: %s", request_payload)
-            response = await self._get_resource("", params=request_payload)
+            try:
+                response = await self._get_resource("", params=request_payload)
+            except Exception as e:
+                # A timeout has an empty message, so fall back to the exception type
+                reason = str(e) or type(e).__name__
+                raise DaikinException(
+                    f"Failed to send command to device {self.device_ip}: {reason}"
+                ) from e
             _LOGGER.debug("Response: %s", response)
 
             # Update status after setting
