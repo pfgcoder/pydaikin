@@ -73,7 +73,7 @@ class DaikinRequest:
                 index = get_existing_index(pn, entry)
                 if index == -1:
                     entry.append({"pn": pn, "pch": []})
-                entry = entry[-1]['pch']
+                entry = entry[index]['pch']
             entry.append(attribute.format())
         return payload
 

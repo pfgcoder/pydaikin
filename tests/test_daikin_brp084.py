@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 from tenacity import wait_none
 
-from pydaikin.daikin_brp084 import DaikinBRP084
+from pydaikin.daikin_brp084 import DaikinAttribute, DaikinBRP084, DaikinRequest
 from pydaikin.exceptions import DaikinException
 
 
@@ -2206,3 +2206,25 @@ async def test_set_error_names_device():
         match="Failed to send command to device 192.0.2.10: TimeoutError",
     ):
         await device.set({"stemp": "22"})
+
+
+def test_serialize_adds_to_existing_container_that_is_not_last():
+    """An attribute joins its container even when another was added after it."""
+    to = "/dsiot/edge/adr_0100.dgc_status"
+    request = DaikinRequest(
+        [
+            DaikinAttribute("p_01", "0200", ["e_1002", "e_3001"], to),
+            DaikinAttribute("p_24", "01", ["e_1002", "e_3003"], to),
+            DaikinAttribute("p_02", "2C", ["e_1002", "e_3001"], to),
+        ]
+    )
+
+    e_1002 = request.serialize()["requests"][0]["pc"]["pch"][0]
+
+    assert e_1002["pch"] == [
+        {
+            "pn": "e_3001",
+            "pch": [{"pn": "p_01", "pv": "0200"}, {"pn": "p_02", "pv": "2C"}],
+        },
+        {"pn": "e_3003", "pch": [{"pn": "p_24", "pv": "01"}]},
+    ]
