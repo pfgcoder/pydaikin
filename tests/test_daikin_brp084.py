@@ -2123,21 +2123,23 @@ def _set_pv(response, path, value):
     node["pv"] = value
 
 
+@pytest.mark.parametrize("value", [None, "", "zz"])
 @pytest.mark.parametrize(
     "path_keys, value_key, expected",
     [
+        (("indoor_temp",), "htemp", "--"),
         (("indoor_humidity",), "hhum", "--"),
         (("temp_settings", "cool"), "stemp", "--"),
         (("swing_settings", "cool", "vertical"), "f_dir", "horizontal"),
     ],
 )
 @pytest.mark.asyncio
-async def test_update_status_tolerates_null_value(path_keys, value_key, expected):
-    """A null value doesn't abort the update, as for indoor temperature."""
+async def test_update_status_tolerates_bad_value(path_keys, value_key, expected, value):
+    """A null, blank or non-hex value doesn't abort the update."""
     device = DaikinBRP084("192.0.2.10", session=MagicMock())
     response = _minimal_status_response()
     _set_pv(response, device.get_path("swing_settings", "cool", "horizontal"), "0F0000")
-    _set_pv(response, device.get_path(*path_keys), None)
+    _set_pv(response, device.get_path(*path_keys), value)
     device._get_resource = AsyncMock(return_value=response)
 
     await device.update_status()
@@ -2145,10 +2147,12 @@ async def test_update_status_tolerates_null_value(path_keys, value_key, expected
     assert device.values.get(value_key) == expected
 
 
+@pytest.mark.parametrize("value", [None, "", "zz"])
 @pytest.mark.asyncio
-async def test_update_status_tolerates_null_compressor_temp():
-    """A null compressor temperature leaves it unsupported."""
+async def test_update_status_bad_compressor_temp_reads_as_unknown(value):
+    """A null, blank or non-hex compressor temperature replaces the last one."""
     device = DaikinBRP084("192.0.2.10", session=MagicMock())
+    device.values["cmp_temp"] = "70.0"
     response = _minimal_status_response()
     response["responses"].append(
         {
@@ -2158,7 +2162,7 @@ async def test_update_status_tolerates_null_compressor_temp():
                 "pch": [
                     {
                         "pn": "e_1003",
-                        "pch": [{"pn": "e_A005", "pch": [{"pn": "p_01", "pv": None}]}],
+                        "pch": [{"pn": "e_A005", "pch": [{"pn": "p_01", "pv": value}]}],
                     }
                 ],
             },
@@ -2168,7 +2172,13 @@ async def test_update_status_tolerates_null_compressor_temp():
 
     await device.update_status()
 
-    assert not device.support_compressor_temperature
+    assert device.compressor_temperature is None
+
+
+def test_hex_le_to_temp_blank_raises():
+    """A blank value is an error, not a reading of 0."""
+    with pytest.raises(ValueError):
+        DaikinBRP084.hex_le_to_temp("")
 
 
 @pytest.mark.parametrize("mode_value", [None, "0900"])
