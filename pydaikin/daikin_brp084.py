@@ -8,7 +8,11 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from aiohttp import ClientSession, ClientTimeout
-from aiohttp.client_exceptions import ClientOSError, ServerDisconnectedError
+from aiohttp.client_exceptions import (
+    ClientOSError,
+    ClientPayloadError,
+    ServerDisconnectedError,
+)
 from tenacity import (
     before_sleep_log,
     retry,
@@ -665,7 +669,7 @@ class DaikinBRP084(Appliance):
         wait=wait_random_exponential(multiplier=0.2, max=1.2),
         stop=stop_after_attempt(3),
         retry=retry_if_exception_type(
-            (TimeoutError, ClientOSError, ServerDisconnectedError)
+            (TimeoutError, ClientOSError, ClientPayloadError, ServerDisconnectedError)
         ),
         before_sleep=before_sleep_log(_LOGGER, logging.DEBUG),
     )

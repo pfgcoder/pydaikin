@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-from aiohttp import ClientSession, ClientTimeout
+from aiohttp import ClientPayloadError, ClientSession, ClientTimeout
 import pytest
 import pytest_asyncio
 from tenacity import wait_none
@@ -2228,3 +2228,24 @@ def test_serialize_adds_to_existing_container_that_is_not_last():
         },
         {"pn": "e_3003", "pch": [{"pn": "p_24", "pv": "01"}]},
     ]
+
+
+@pytest.mark.asyncio
+async def test_request_retried_after_reply_is_cut_off(monkeypatch):
+    """A reply that breaks off part-way through is retried."""
+    monkeypatch.setattr(DaikinBRP084._get_resource.retry, "wait", wait_none())
+    response = MagicMock()
+    response.json = AsyncMock(
+        side_effect=[ClientPayloadError("Response payload is not completed"), {}]
+    )
+
+    @asynccontextmanager
+    async def post(*args, **kwargs):
+        yield response
+
+    session = MagicMock()
+    session.post = post
+    device = DaikinBRP084("192.0.2.10", session=session)
+
+    assert await device._get_resource("") == {}
+    assert response.json.await_count == 2
