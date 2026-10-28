@@ -2108,3 +2108,87 @@ async def test_requests_to_one_adapter_run_one_at_a_time():
     await asyncio.gather(*(device._get_resource("") for _ in range(3)))
 
     assert most_in_flight == 1
+
+
+def _set_pv(response, path, value):
+    """Set the value at an API path in a multireq response."""
+    node = next(r["pc"] for r in response["responses"] if r["fr"] == path[0])
+    for pn in path[2:]:
+        node = next(child for child in node["pch"] if child["pn"] == pn)
+    node["pv"] = value
+
+
+@pytest.mark.parametrize(
+    "path_keys, value_key, expected",
+    [
+        (("indoor_humidity",), "hhum", "--"),
+        (("temp_settings", "cool"), "stemp", "--"),
+        (("swing_settings", "cool", "vertical"), "f_dir", "horizontal"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_update_status_tolerates_null_value(path_keys, value_key, expected):
+    """A null value doesn't abort the update, as for indoor temperature."""
+    device = DaikinBRP084("192.0.2.10", session=MagicMock())
+    response = _minimal_status_response()
+    _set_pv(response, device.get_path("swing_settings", "cool", "horizontal"), "0F0000")
+    _set_pv(response, device.get_path(*path_keys), None)
+    device._get_resource = AsyncMock(return_value=response)
+
+    await device.update_status()
+
+    assert device.values.get(value_key) == expected
+
+
+@pytest.mark.asyncio
+async def test_update_status_tolerates_null_compressor_temp():
+    """A null compressor temperature leaves it unsupported."""
+    device = DaikinBRP084("192.0.2.10", session=MagicMock())
+    response = _minimal_status_response()
+    response["responses"].append(
+        {
+            "fr": "/dsiot/edge/adr_0200.dgc_status",
+            "pc": {
+                "pn": "dgc_status",
+                "pch": [
+                    {
+                        "pn": "e_1003",
+                        "pch": [{"pn": "e_A005", "pch": [{"pn": "p_01", "pv": None}]}],
+                    }
+                ],
+            },
+        }
+    )
+    device._get_resource = AsyncMock(return_value=response)
+
+    await device.update_status()
+
+    assert not device.support_compressor_temperature
+
+
+@pytest.mark.parametrize("mode_value", [None, "0900"])
+@pytest.mark.asyncio
+async def test_update_status_unknown_mode_raises_daikin_exception(mode_value):
+    """An unknown or null mode raises DaikinException, not KeyError."""
+    device = DaikinBRP084("192.0.2.10", session=MagicMock())
+    response = _minimal_status_response()
+    _set_pv(response, device.get_path("mode"), mode_value)
+    device._get_resource = AsyncMock(return_value=response)
+
+    with pytest.raises(DaikinException, match="Unknown mode"):
+        await device.update_status()
+
+
+def test_find_value_by_pn_missing_value_raises_daikin_exception():
+    """An entry with no 'pv' raises DaikinException, not KeyError."""
+    response = {
+        "responses": [
+            {
+                "fr": "/dsiot/edge.adp_i",
+                "pc": {"pn": "adp_i", "pch": [{"pn": "mac"}]},
+            }
+        ]
+    }
+
+    with pytest.raises(DaikinException, match="Key mac has no value"):
+        DaikinBRP084.find_value_by_pn(response, "/dsiot/edge.adp_i", "adp_i", "mac")

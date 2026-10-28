@@ -375,6 +375,8 @@ class DaikinBRP084(Appliance):
             for pcs in data:
                 if pcs.get("pn") == current_key:
                     if not keys:
+                        if "pv" not in pcs:
+                            raise DaikinException(f"Key {current_key} has no value")
                         return pcs["pv"]
                     data = pcs.get("pch") or []
                     found = True
@@ -392,11 +394,18 @@ class DaikinBRP084(Appliance):
             and mode in self.API_PATHS["swing_settings"]
         ):
             try:
-                vertical = "F" in self.find_value_by_pn(
-                    data, *self.get_path("swing_settings", mode, "vertical")
+                # A null axis reads as not swinging.
+                vertical = "F" in (
+                    self.find_value_by_pn(
+                        data, *self.get_path("swing_settings", mode, "vertical")
+                    )
+                    or ""
                 )
-                horizontal = "F" in self.find_value_by_pn(
-                    data, *self.get_path("swing_settings", mode, "horizontal")
+                horizontal = "F" in (
+                    self.find_value_by_pn(
+                        data, *self.get_path("swing_settings", mode, "horizontal")
+                    )
+                    or ""
                 )
 
                 if horizontal and vertical:
@@ -409,6 +418,12 @@ class DaikinBRP084(Appliance):
                 pass  # Keep default 'off'
 
         return 'off'  # Default return value
+
+    def _decode_mode(self, mode_value: Optional[str]) -> str:
+        """Return the mode name, raising DaikinException for an unknown value."""
+        if mode_value not in self.MODE_MAP:
+            raise DaikinException(f"Unknown mode {mode_value!r}")
+        return self.MODE_MAP[mode_value]
 
     def _safe_extract(self, response: dict, *keys) -> Optional[str]:
         """Extract a value from the response, returning None if not found."""
@@ -497,7 +512,7 @@ class DaikinBRP084(Appliance):
             mode_value = self.find_value_by_pn(response, *self.get_path("mode"))
 
             self.values['pow'] = "0" if is_off else "1"
-            self.values['mode'] = 'off' if is_off else self.MODE_MAP[mode_value]
+            self.values['mode'] = 'off' if is_off else self._decode_mode(mode_value)
 
             # Get temperatures. Outdoor temp is decoded as a little-endian
             # signed value (see _safe_hex_temp) to handle sub-zero readings, and
@@ -517,7 +532,7 @@ class DaikinBRP084(Appliance):
                         )
                     )
                 )
-            except DaikinException:
+            except (DaikinException, TypeError):  # TypeError: null value
                 self.values['hhum'] = "--"
 
             # Get target temperature
@@ -531,7 +546,7 @@ class DaikinBRP084(Appliance):
                             )
                         )
                     )
-                except DaikinException:
+                except (DaikinException, TypeError):  # TypeError: null value
                     self.values['stemp'] = "--"
             else:
                 self.values['stemp'] = "--"
@@ -630,7 +645,7 @@ class DaikinBRP084(Appliance):
                     self.find_value_by_pn(response, *self.get_path("compressor_temp"))
                 )
             )
-        except DaikinException:
+        except (DaikinException, TypeError):  # TypeError: null value
             pass
 
         # Decoded model strings.
