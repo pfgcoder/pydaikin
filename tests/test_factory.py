@@ -896,3 +896,15 @@ def test_extract_ip_port_discovery_error(monkeypatch):
 
     assert device_ip == "livingroom"
     assert port is None
+
+
+@pytest.mark.parametrize("device_ip", ["192.168.1.100", "fe80::1"])
+def test_extract_ip_port_skips_discovery_for_ip(monkeypatch, device_ip):
+    """An IP address is used as given, without a discovery lookup."""
+
+    def fail_get_name(name):
+        raise AssertionError("discovery should not run for an IP address")
+
+    monkeypatch.setattr("pydaikin.factory.get_name", fail_get_name)
+
+    assert DaikinFactory._extract_ip_port(device_ip) == (device_ip, None)
