@@ -1,5 +1,6 @@
 "Factory to generate Pydaikin complete objects"
 
+import ipaddress
 import logging
 import re
 from typing import Optional, Tuple
@@ -188,6 +189,14 @@ class DaikinFactory:  # pylint: disable=too-few-public-methods
     @staticmethod
     def _extract_ip_port(device_id: str) -> Tuple[str, Optional[int]]:
         """Extract IP and optional port from device_id string or lookup via discovery."""
+        # An IP address needs no lookup: discovery matches devices by name,
+        # and it blocks on a UDP broadcast.
+        try:
+            ipaddress.ip_address(device_id)
+            return device_id, None
+        except ValueError:
+            pass
+
         # Check if there's a port specified in the device_id
         port_match = re.match(r'^(.+):(\d+)$', device_id)
         if port_match:
