@@ -120,6 +120,22 @@ class DaikinPowerMixin:
                         # we just update the cmp_freq average
                         continue
 
+                if self._is_energy_jump(new_state, old_state):
+                    # If kept, this pair would make the power estimate log an
+                    # impossible measure on every poll until it aged out of
+                    # the history (6 hours), so start again from the new state.
+                    _LOGGER.debug(
+                        "Energy counters of %s jumped (today %s -> %s, "
+                        "yesterday %s -> %s), restarting the history",
+                        mode,
+                        old_state.today,
+                        new_state.today,
+                        old_state.yesterday,
+                        new_state.yesterday,
+                    )
+                    self._energy_consumption_history[mode] = []
+                    new_state = new_state._replace(first_state=True)
+
             self._energy_consumption_history[mode].insert(0, new_state)
 
             # We can remove very old states (except the latest one)
@@ -162,6 +178,20 @@ class DaikinPowerMixin:
             return value
         except (TypeError, IndexError, AttributeError, ValueError):
             return None
+
+    @staticmethod
+    def _is_energy_jump(curr, prev) -> bool:
+        """Return True when curr can't follow prev on the device's counters.
+
+        Today normally grows, and when it doesn't, the day has rolled over
+        and yesterday holds at least the previous today. Anything else means
+        the counters jumped: the device's clock changed, or it was read in
+        the middle of its midnight rollover. This is the case
+        _compute_diff_energy reports as impossible.
+        """
+        if curr.today > prev.today:
+            return False
+        return curr.yesterday is None or curr.yesterday < prev.today
 
     @staticmethod
     def _compute_diff_energy(mode: str, curr, prev):
