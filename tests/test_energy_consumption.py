@@ -1,8 +1,10 @@
 """Test energy consumption and power monitoring."""
 
+import logging
 from unittest.mock import MagicMock
 
 from aiohttp import ClientSession
+from freezegun import freeze_time
 import pytest
 import pytest_asyncio
 
@@ -394,3 +396,68 @@ def test_get_info_resources_without_energy_support():
 
     assert device.support_energy_consumption is False
     assert device.get_info_resources() == DaikinBRP069.INFO_RESOURCES
+
+
+def _register(device, datas):
+    """Register an energy state from a datas reading (Wh, oldest day first)."""
+    device.values.update({"datas": datas})
+    device._register_energy_consumption_history()
+
+
+@pytest.mark.parametrize(
+    "jumped",
+    [
+        # Today unchanged but yesterday below it: a read in the middle of the
+        # device's midnight rollover (seen on a BRP084).
+        "0/0/0/0/0/2000/10700",
+        # Today fell and yesterday doesn't account for it (a clock change).
+        "0/0/0/0/0/3000/500",
+        # Today fell and yesterday is missing.
+        "500",
+    ],
+)
+def test_energy_jump_restarts_history(jumped):
+    """A state that can't follow the previous one starts a new history."""
+    device = DaikinBRP069("127.0.0.1", session=MagicMock())
+    _register(device, "0/0/0/0/0/3000/10700")
+
+    _register(device, jumped)
+
+    history = device._energy_consumption_history[ATTR_TOTAL]
+    assert len(history) == 1
+    assert history[0].first_state
+    assert history[0].today == int(jumped.split("/")[-1]) / 1000
+
+
+def test_day_rollover_keeps_history():
+    """A normal rollover (yesterday holds the old today) is not a jump."""
+    device = DaikinBRP069("127.0.0.1", session=MagicMock())
+    _register(device, "0/0/0/0/0/10000/23000")
+
+    _register(device, "0/0/0/0/10000/23000/2000")
+
+    history = device._energy_consumption_history[ATTR_TOTAL]
+    assert len(history) == 2
+    assert not history[0].first_state
+
+
+def test_energy_jump_logs_no_error(caplog):
+    """The power estimate no longer logs an error on every later poll."""
+    device = DaikinBRP069("127.0.0.1", session=MagicMock())
+    readings = [
+        "0/0/0/0/0/3000/10600",
+        "0/0/0/0/0/3000/10700",
+        "0/0/0/0/0/2000/10700",  # read mid-rollover
+        "0/0/0/0/3000/10700/0",  # rollover finished
+        "0/0/0/3000/10700/0/100",
+        "0/0/0/3000/10700/0/200",
+    ]
+    with freeze_time("2026-11-02 00:00:00") as frozen:
+        for datas in readings:
+            _register(device, datas)
+            device.current_power_consumption(mode=ATTR_TOTAL)
+            frozen.tick(120)
+
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+    history = device._energy_consumption_history[ATTR_TOTAL]
+    assert [state.today for state in reversed(history)] == [10.7, 0.0, 0.1, 0.2]
