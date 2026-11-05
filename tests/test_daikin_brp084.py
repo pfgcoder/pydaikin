@@ -2208,6 +2208,21 @@ def fast_timeouts(monkeypatch):
     monkeypatch.setattr(DaikinBRP084._do_get_resource.retry, "wait", wait_none())
 
 
+class _FirstAttemptTimeout:
+    """A 0.1s timeout for the first attempt and 5s after that.
+
+    Only the first reply should time out, so the attempt meant to succeed
+    gets plenty of time even on a slow machine.
+    """
+
+    def __init__(self):
+        self.attempts = 0
+
+    def __get__(self, obj, objtype=None):
+        self.attempts += 1
+        return ClientTimeout(total=0.1 if self.attempts == 1 else 5)
+
+
 async def _slow_reply(request):
     """Answer only after the (shrunk) request timeout has expired."""
     await asyncio.sleep(0.5)
@@ -2216,9 +2231,12 @@ async def _slow_reply(request):
 
 @pytest.mark.asyncio
 async def test_update_status_retries_after_timeout(
-    aresponses, client_session, fast_timeouts
+    aresponses, client_session, monkeypatch
 ):
     """A request that times out is retried instead of failing the update."""
+    timeout = _FirstAttemptTimeout()
+    monkeypatch.setattr(DaikinBRP084, "HTTP_TIMEOUT", timeout)
+    monkeypatch.setattr(DaikinBRP084._do_get_resource.retry, "wait", wait_none())
     aresponses.add(
         path_pattern="/dsiot/multireq", method_pattern="POST", response=_slow_reply
     )
@@ -2237,6 +2255,7 @@ async def test_update_status_retries_after_timeout(
 
     assert device.values.get("mac") == "112233445566"
     assert device.values.get("mode") == "cool"
+    assert timeout.attempts == 2
 
 
 @pytest.mark.asyncio
