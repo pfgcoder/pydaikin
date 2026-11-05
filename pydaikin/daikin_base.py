@@ -171,7 +171,7 @@ class Appliance(DaikinPowerMixin):
                     raise ValueError(f"no device found for {device_id}") from exc
             else:
                 device_ip = device_name['ip']
-        return device_id
+        return device_ip
 
     def __init__(self, device_id, session: Optional[ClientSession] = None) -> None:
         """Init the pydaikin appliance, representing one Daikin device."""

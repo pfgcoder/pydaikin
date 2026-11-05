@@ -484,18 +484,14 @@ def test_discover_ip_with_ip():
     assert result == '192.168.1.100'
 
 
-def test_discover_ip_with_dns():
-    """Test discover_ip with DNS name."""
-    import socket  # noqa: F401
+def test_discover_ip_with_dns(monkeypatch):
+    """A name discovery doesn't find is looked up in DNS."""
+    monkeypatch.setattr('pydaikin.daikin_base.get_name', lambda name: None)
+    monkeypatch.setattr(
+        'pydaikin.daikin_base.socket.gethostbyname', lambda name: '192.0.2.7'
+    )
 
-    # Try with localhost which should resolve
-    try:
-        result = DaikinBRP069.discover_ip('localhost')
-        # Should either succeed or raise ValueError
-        assert result == 'localhost' or result is not None
-    except ValueError:
-        # DNS resolution can fail in test environment
-        pass
+    assert DaikinBRP069.discover_ip('daikin.example') == '192.0.2.7'
 
 
 def test_discover_ip_invalid():
@@ -511,7 +507,7 @@ def test_discover_ip_from_discovery(monkeypatch):
         'pydaikin.daikin_base.get_name', lambda name: {'ip': '192.168.1.50'}
     )
 
-    assert DaikinBRP069.discover_ip('livingroom') == 'livingroom'
+    assert DaikinBRP069.discover_ip('livingroom') == '192.168.1.50'
 
 
 @pytest.mark.asyncio
