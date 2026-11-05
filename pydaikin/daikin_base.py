@@ -326,6 +326,9 @@ class Appliance(DaikinPowerMixin):
         except ExceptionGroup as eg:
             for exc in eg.exceptions:
                 _LOGGER.error("Exception in TaskGroup: %s", exc)
+            # The group cancelled the other requests, so reading their results
+            # would raise CancelledError and hide what went wrong.
+            raise eg.exceptions[0] from None
 
         for resource, task in zip(resources, tasks):
             data = task.result()

@@ -2,7 +2,11 @@ import asyncio
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
-from aiohttp.client_exceptions import ClientPayloadError, ClientResponseError
+from aiohttp.client_exceptions import (
+    ClientOSError,
+    ClientPayloadError,
+    ClientResponseError,
+)
 from aiohttp.web_exceptions import HTTPForbidden
 import pytest
 from tenacity import wait_none
@@ -572,6 +576,23 @@ async def test_get_resource_retries_slow_or_cut_off_reply(monkeypatch, error):
 
     assert await device._get_resource('common/get_datetime') == {'sta': '2'}
     assert session.get.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_update_status_raises_the_real_error(monkeypatch):
+    """When one request fails and the others are cancelled, its error is raised."""
+    monkeypatch.setattr(Appliance, 'INFO_RESOURCES', ['slow', 'failing'])
+
+    async def get_resource(path, params=None):
+        if path == 'slow':
+            await asyncio.sleep(10)
+        raise ClientOSError("Connection reset by peer")
+
+    device = Appliance('192.168.1.100', session=MagicMock())
+    monkeypatch.setattr(device, '_get_resource', get_resource)
+
+    with pytest.raises(ClientOSError, match="Connection reset by peer"):
+        await device.update_status()
 
 
 @pytest.mark.asyncio
