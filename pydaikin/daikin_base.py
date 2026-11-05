@@ -9,7 +9,7 @@ from ssl import SSLContext
 from typing import Optional, Self
 from urllib.parse import unquote
 
-from aiohttp import ClientSession, ClientTimeout
+from aiohttp import ClientSession, ClientTimeout, RequestInfo
 from aiohttp.client_exceptions import (
     ClientOSError,
     ClientPayloadError,
@@ -56,6 +56,23 @@ def retry_request(retry_condition):
         stop=stop_after_attempt(3),
         retry=retry_condition,
         before_sleep=before_sleep_log(_LOGGER, logging.DEBUG),
+    )
+
+
+def _redact(values: dict, secret_keys: tuple) -> dict:
+    """Return a copy of values with the secret ones masked, for logging."""
+    return {
+        key: "****" if key in secret_keys else value for key, value in values.items()
+    }
+
+
+def _without_query(request_info: RequestInfo) -> RequestInfo:
+    """Return request_info without the query string, which can hold a secret."""
+    return RequestInfo(
+        request_info.url.with_query(None),
+        request_info.method,
+        request_info.headers,
+        request_info.real_url.with_query(None),
     )
 
 
@@ -265,8 +282,8 @@ class Appliance(DaikinPowerMixin):
             "Calling: %s/%s %s [%s]",
             self.base_url,
             path,
-            params if "pass" not in params else {**params, **{"pass": "****"}},
-            self.headers,
+            _redact(params, ("pass", "key")),
+            _redact(self.headers, ("X-Daikin-uuid",)),
         )
 
         # cannot manage session on outer async with or this will close the session
@@ -286,19 +303,30 @@ class Appliance(DaikinPowerMixin):
                 ssl=self.ssl_context,
                 timeout=self.HTTP_TIMEOUT,
             ) as response:
+                # The query string can hold the password or key, so leave it out
+                url = response.url.with_query(None)
                 if response.status == 403:
-                    raise HTTPForbidden(reason=f"HTTP 403 Forbidden for {response.url}")
+                    raise HTTPForbidden(reason=f"HTTP 403 Forbidden for {url}")
                 # Airbase returns a 404 response on invalid urls but requires fallback
                 if response.status == 404 and not strict:
-                    _LOGGER.debug("HTTP 404 Not Found for %s", response.url)
+                    _LOGGER.debug("HTTP 404 Not Found for %s", url)
                     return {}  # return an empty dict to indicate successful connection but bad data
                 if response.status != 200:
                     _LOGGER.debug(
                         "Unexpected HTTP status code %s for %s",
                         response.status,
-                        response.url,
+                        url,
                     )
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except ClientResponseError as err:
+                    raise ClientResponseError(
+                        _without_query(err.request_info),
+                        err.history,
+                        status=err.status,
+                        message=err.message,
+                        headers=err.headers,
+                    ) from None
                 body = await response.text()
                 if strict:
                     parse_response(body, strict=True)

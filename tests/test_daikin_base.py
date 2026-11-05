@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 from aiohttp.client_exceptions import (
@@ -593,6 +594,55 @@ async def test_update_status_raises_the_real_error(monkeypatch):
 
     with pytest.raises(ClientOSError, match="Connection reset by peer"):
         await device.update_status()
+
+
+@pytest.mark.asyncio
+async def test_request_log_hides_secrets(caplog):
+    """The debug log of a request masks the password, key and client uuid."""
+    caplog.set_level(logging.DEBUG, logger="pydaikin.daikin_base")
+    response = MagicMock(status=200)
+    response.text = AsyncMock(return_value="ret=OK")
+
+    @asynccontextmanager
+    async def answering(*_args, **_kwargs):
+        yield response
+
+    session = MagicMock()
+    session.get = MagicMock(side_effect=lambda *a, **kw: answering())
+    device = DaikinBRP069('192.168.1.100', session=session)
+    device.headers = {"X-Daikin-uuid": "secret-uuid"}
+
+    await device._get_resource(
+        'common/register_terminal', {'key': 'secret-key', 'pass': 'secret-pass'}
+    )
+
+    assert "register_terminal" in caplog.text
+    assert "secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, error", [(403, HTTPForbidden), (500, ClientResponseError)]
+)
+async def test_http_error_leaves_out_query_string(
+    aresponses, client_session, monkeypatch, status, error
+):
+    """An HTTP error doesn't carry the query string, which holds the key."""
+    monkeypatch.setattr(Appliance._do_get_resource.retry, "wait", wait_none())
+    for _ in range(3):
+        aresponses.add(
+            path_pattern="/common/register_terminal",
+            method_pattern="GET",
+            response=aresponses.Response(status=status, text="Error"),
+        )
+
+    device = DaikinBRP069('192.168.1.100', session=client_session)
+    with pytest.raises(error) as excinfo:
+        await device._get_resource('common/register_terminal', {'key': 'secret-key'})
+
+    assert "register_terminal" in str(excinfo.value)
+    assert "secret" not in str(excinfo.value)
+    assert excinfo.value.__cause__ is None
 
 
 @pytest.mark.asyncio
