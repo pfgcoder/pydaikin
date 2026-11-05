@@ -1,9 +1,11 @@
 import asyncio
-from unittest.mock import MagicMock
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock
 
-from aiohttp.client_exceptions import ClientResponseError
+from aiohttp.client_exceptions import ClientPayloadError, ClientResponseError
 from aiohttp.web_exceptions import HTTPForbidden
 import pytest
+from tenacity import wait_none
 
 from pydaikin.daikin_base import Appliance
 from pydaikin.daikin_brp069 import DaikinBRP069
@@ -546,6 +548,34 @@ async def test_get_resource_coalescing(aresponses, client_session):
 
     assert r1 == r2
     aresponses.assert_all_requests_matched()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [TimeoutError(), ClientPayloadError("Response payload is not completed")],
+)
+async def test_get_resource_retries_slow_or_cut_off_reply(monkeypatch, error):
+    """A read that times out or gets a cut-off reply is tried again."""
+    monkeypatch.setattr(Appliance._do_get_resource.retry, "wait", wait_none())
+    response = MagicMock(status=200)
+    response.text = AsyncMock(return_value="ret=OK,sta=2")
+
+    @asynccontextmanager
+    async def failing(*_args, **_kwargs):
+        raise error
+        yield  # pylint: disable=unreachable
+
+    @asynccontextmanager
+    async def answering(*_args, **_kwargs):
+        yield response
+
+    session = MagicMock()
+    session.get = MagicMock(side_effect=[failing(), answering()])
+    device = DaikinBRP069('192.168.1.100', session=session)
+
+    assert await device._get_resource('common/get_datetime') == {'sta': '2'}
+    assert session.get.call_count == 2
 
 
 @pytest.mark.asyncio

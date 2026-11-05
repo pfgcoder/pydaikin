@@ -12,6 +12,7 @@ from urllib.parse import unquote
 from aiohttp import ClientSession, ClientTimeout
 from aiohttp.client_exceptions import (
     ClientOSError,
+    ClientPayloadError,
     ClientResponseError,
     ServerDisconnectedError,
 )
@@ -31,6 +32,31 @@ from .response import parse_response
 from .values import ApplianceValues
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# Errors from an adapter that was slow, dropped the connection or cut a reply
+# short. Another attempt usually works.
+TRANSIENT_ERRORS = (
+    TimeoutError,
+    ClientOSError,
+    ClientPayloadError,
+    ServerDisconnectedError,
+)
+
+
+def retry_request(retry_condition):
+    """Retry a device request when retry_condition says so.
+
+    Every adapter class uses the same policy: up to 3 attempts, with a short
+    random pause between them.
+    """
+    return retry(
+        reraise=True,
+        wait=wait_random_exponential(multiplier=0.2, max=1.2),
+        stop=stop_after_attempt(3),
+        retry=retry_condition,
+        before_sleep=before_sleep_log(_LOGGER, logging.DEBUG),
+    )
 
 
 def _is_read(retry_state) -> bool:
@@ -223,21 +249,11 @@ class Appliance(DaikinPowerMixin):
             if cache_key:
                 self._pending_requests.pop(cache_key, None)
 
-    @retry(
-        reraise=True,
-        wait=wait_random_exponential(multiplier=0.2, max=1.2),
-        stop=stop_after_attempt(3),
-        retry=retry_all(
-            retry_if_exception_type(
-                (
-                    ClientOSError,
-                    ClientResponseError,
-                    ServerDisconnectedError,
-                )
-            ),
+    @retry_request(
+        retry_all(
+            retry_if_exception_type(TRANSIENT_ERRORS + (ClientResponseError,)),
             _is_read,
-        ),
-        before_sleep=before_sleep_log(_LOGGER, logging.DEBUG),
+        )
     )
     async def _do_get_resource(self, path: str, params: dict, strict: bool = False):
         """Make the actual http request with retry logic.

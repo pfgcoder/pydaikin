@@ -8,20 +8,9 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from aiohttp import ClientSession, ClientTimeout
-from aiohttp.client_exceptions import (
-    ClientOSError,
-    ClientPayloadError,
-    ServerDisconnectedError,
-)
-from tenacity import (
-    before_sleep_log,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_random_exponential,
-)
+from tenacity import retry_if_exception_type
 
-from .daikin_base import Appliance
+from .daikin_base import TRANSIENT_ERRORS, Appliance, retry_request
 from .exceptions import DaikinException
 
 _LOGGER = logging.getLogger(__name__)
@@ -705,15 +694,13 @@ class DaikinBRP084(Appliance):
         async with self.request_semaphore:
             return await self._do_get_resource(path, params)
 
-    @retry(
-        reraise=True,
-        wait=wait_random_exponential(multiplier=0.2, max=1.2),
-        stop=stop_after_attempt(3),
-        retry=retry_if_exception_type(
-            (TimeoutError, ClientOSError, ClientPayloadError, ServerDisconnectedError)
-        ),
-        before_sleep=before_sleep_log(_LOGGER, logging.DEBUG),
-    )
+    # Unlike the other adapters, an HTTP error such as 429 Too Many Requests
+    # isn't retried: more requests make a busy adapter worse. Writes are
+    # retried, because a BRP084 write sets absolute values and the lock above
+    # keeps a newer one from being overtaken.
+    @retry_request(retry_if_exception_type(TRANSIENT_ERRORS))
+    # BRP084 has no strict writes: its replies carry no "ret" to check.
+    # pylint: disable-next=arguments-differ
     async def _do_get_resource(self, path: str, params: Optional[Dict] = None):
         """Make one attempt at the HTTP request."""
         _LOGGER.debug(
