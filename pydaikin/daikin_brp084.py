@@ -76,8 +76,10 @@ class DaikinBRP084(Appliance):
     """Daikin class for BRP devices with firmware 2.8.0."""
 
     # These adapters sometimes take longer than 5 seconds to answer or drop a
-    # request, so allow a longer wait and retry (3 x 15s stays well inside
-    # Home Assistant's 120s polling interval).
+    # request, so allow a longer wait and retry. A request to an adapter that
+    # doesn't answer gives up after about 46s (3 x 15s plus short pauses).
+    # Requests take turns, so a command can first wait behind a stuck poll,
+    # and set() reads the status back afterwards: about 2.3 minutes in all.
     HTTP_TIMEOUT = ClientTimeout(total=15)
 
     # One request at a time, as for BRP069, so a poll and a command don't
