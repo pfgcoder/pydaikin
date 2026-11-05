@@ -57,3 +57,24 @@ def test_init_cipher_sslerror(monkeypatch):
     monkeypatch.setattr(ssl.SSLContext, 'set_ciphers', raise_sslerror)
     device = DaikinBRP072C('127.0.0.1', session=mock_session, key='dummy_key')
     assert device._key == 'dummy_key'
+
+
+def test_uuid_is_random_when_not_given():
+    """Without a uuid, each device object registers its own random one."""
+    first = DaikinBRP072C('192.168.1.100', session=MagicMock(), key='key')
+    second = DaikinBRP072C('192.168.1.100', session=MagicMock(), key='key')
+
+    assert first.headers["X-Daikin-uuid"] != second.headers["X-Daikin-uuid"]
+    assert len(first.headers["X-Daikin-uuid"]) == 32
+
+
+def test_given_uuid_is_used():
+    """A given uuid is sent without its dashes."""
+    device = DaikinBRP072C(
+        '192.168.1.100',
+        session=MagicMock(),
+        key='key',
+        uuid='12345678-1234-5678-1234-567812345678',
+    )
+
+    assert device.headers["X-Daikin-uuid"] == "12345678123456781234567812345678"

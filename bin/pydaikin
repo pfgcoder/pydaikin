@@ -60,6 +60,13 @@ parser.add_argument(
 
 parser.add_argument('-k', '--key', help='unit\'s key (only used by BRP072Cxx devices)')
 
+parser.add_argument(
+    '-u',
+    '--uuid',
+    help='uuid to register with the key; reuse it between runs (only used by '
+    'BRP072Cxx devices, a random one if not given)',
+)
+
 settings = parser.add_argument_group('device settings', 'Modify paramaters of a device')
 
 settings.add_argument(
@@ -140,7 +147,9 @@ async def main():  # pylint: disable=too-many-branches
     if args.list:
         await list_all_devices()
     else:
-        daikin = await DaikinFactory(args.device, key=args.key, password=args.password)
+        daikin = await DaikinFactory(
+            args.device, key=args.key, uuid=args.uuid, password=args.password
+        )
 
         try:
             if not _settings:

@@ -2,7 +2,7 @@
 
 import logging
 import ssl
-from uuid import NAMESPACE_OID, uuid3
+from uuid import uuid4
 
 from .daikin_brp069 import DaikinBRP069
 
@@ -22,12 +22,16 @@ class DaikinBRP072C(DaikinBRP069):
         ssl_context=None,
         fetch_optional=False,
     ) -> None:
-        """Init the pydaikin appliance, representing one Daikin AirBase
-        (BRP15B61) device."""
+        """Init the pydaikin appliance, representing one Daikin BRP072Cxx device.
+
+        The uuid identifies this client to the adapter, which registers it with
+        the key. Pass the same uuid each time to reuse one registration. Without
+        one, a new random uuid is used, so no two installs share a uuid.
+        """
         super().__init__(device_id, session, fetch_optional=fetch_optional)
         self._key = key
         if uuid is None:
-            uuid = uuid3(NAMESPACE_OID, 'pydaikin')
+            uuid = uuid4()
         self._uuid = str(uuid).replace('-', '')
         self.headers = {"X-Daikin-uuid": self._uuid}
         self.ssl_context = (
