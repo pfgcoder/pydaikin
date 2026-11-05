@@ -310,6 +310,9 @@ class DaikinBRP084(Appliance):
         """Initialize the Daikin appliance for firmware 2.8.0."""
         super().__init__(device_id, session)
         self.url = f"{self.base_url}/dsiot/multireq"
+        # The mode the unit runs in when on. The adapter reports it even while
+        # the unit is off, when values['mode'] is 'off'.
+        self._operation_mode: Optional[str] = None
 
     @staticmethod
     def hex_to_temp(value: str, divisor=2) -> float:
@@ -526,6 +529,7 @@ class DaikinBRP084(Appliance):
             # Mode first, so an unknown mode leaves pow as it was.
             self.values['mode'] = 'off' if is_off else self._decode_mode(mode_value)
             self.values['pow'] = "0" if is_off else "1"
+            self._operation_mode = self.MODE_MAP.get(mode_value)
 
             # Get temperatures. Outdoor temp is decoded as a little-endian
             # signed value (see _safe_hex_temp) to handle sub-zero readings, and
@@ -796,21 +800,37 @@ class DaikinBRP084(Appliance):
                 settings['mode'],
             )
 
+    def _settings_mode(self) -> Optional[str]:
+        """Return the mode whose setpoint, fan and swing a write should change.
+
+        While the unit is off, that's the mode it runs in when turned back on,
+        so a change made while it's off isn't lost.
+        """
+        mode = self.values.get('mode')
+        if mode != 'off':
+            return mode
+        if self._operation_mode is None:
+            _LOGGER.warning(
+                "Mode of %s is unknown while it's off; the change will not be sent",
+                self.device_ip,
+            )
+        return self._operation_mode
+
     def _handle_temperature_setting(self, settings, requests):
         """Handle temperature-related settings."""
-        if (
-            'stemp' not in settings
-            or self.values['mode'] not in self.API_PATHS["temp_settings"]
-        ):
+        if 'stemp' not in settings:
+            return
+        mode = self._settings_mode()
+        if mode not in self.API_PATHS["temp_settings"]:
             return
 
-        path = self.get_path("temp_settings", self.values['mode'])
+        path = self.get_path("temp_settings", mode)
         temp_hex = self.temp_to_hex(float(settings['stemp']))
         self.add_request(requests, path, temp_hex)
 
     def _handle_dry_comfort_offset_setting(self, settings, requests):
         """Handle dry-mode comfort offset settings."""
-        if "dry_comfort_offset" not in settings or self.values.get("mode") != "dry":
+        if "dry_comfort_offset" not in settings or self._settings_mode() != "dry":
             return
 
         path = self.get_path("dry_comfort_offset")
@@ -826,13 +846,13 @@ class DaikinBRP084(Appliance):
 
     def _handle_fan_setting(self, settings, requests):
         """Handle fan-related settings."""
-        if (
-            'f_rate' not in settings
-            or self.values['mode'] not in self.API_PATHS["fan_settings"]
-        ):
+        if 'f_rate' not in settings:
+            return
+        mode = self._settings_mode()
+        if mode not in self.API_PATHS["fan_settings"]:
             return
 
-        path = self.get_path("fan_settings", self.values['mode'])
+        path = self.get_path("fan_settings", mode)
         fan_value = None
 
         # Try both formats - the internal one and the user-friendly one
@@ -846,18 +866,16 @@ class DaikinBRP084(Appliance):
 
     def _handle_swing_setting(self, settings, requests):
         """Handle swing-related settings."""
-        if (
-            'f_dir' not in settings
-            or self.values['mode'] not in self.API_PATHS["swing_settings"]
-        ):
+        if 'f_dir' not in settings:
+            return
+        mode = self._settings_mode()
+        if mode not in self.API_PATHS["swing_settings"]:
             return
 
         # Set vertical swing, unless an explicit vane position is also being
         # set (that takes precedence for the vertical axis, handled separately).
         if 'vane_vertical' not in settings:
-            vertical_path = self.get_path(
-                "swing_settings", self.values['mode'], "vertical"
-            )
+            vertical_path = self.get_path("swing_settings", mode, "vertical")
             self.add_request(
                 requests,
                 vertical_path,
@@ -869,9 +887,7 @@ class DaikinBRP084(Appliance):
             )
 
         # Set horizontal swing
-        horizontal_path = self.get_path(
-            "swing_settings", self.values['mode'], "horizontal"
-        )
+        horizontal_path = self.get_path("swing_settings", mode, "horizontal")
         self.add_request(
             requests,
             horizontal_path,
@@ -923,17 +939,17 @@ class DaikinBRP084(Appliance):
         restores 'off'/'swing'. Mode-specific, like swing. Only these byte-0
         states have physical effect on this firmware.
         """
-        if (
-            'vane_vertical' not in settings
-            or self.values['mode'] not in self.API_PATHS["swing_settings"]
-        ):
+        if 'vane_vertical' not in settings:
+            return
+        mode = self._settings_mode()
+        if mode not in self.API_PATHS["swing_settings"]:
             return
 
         raw = self.REVERSE_VERTICAL_VANE_MAP.get(settings['vane_vertical'])
         if raw is None:
             return
 
-        path = self.get_path("swing_settings", self.values['mode'], "vertical")
+        path = self.get_path("swing_settings", mode, "vertical")
         self.add_request(requests, path, raw)
 
     async def set(self, settings):

@@ -1888,6 +1888,98 @@ def test_handle_temperature_setting_unsupported_mode():
     assert len(requests) == 0
 
 
+def _off_unit_response(mode_value):
+    """Build an update_status response for a unit that is off in the given mode."""
+    return {
+        "responses": [
+            {
+                "fr": "/dsiot/edge/adr_0100.dgc_status",
+                "pc": {
+                    "pn": "dgc_status",
+                    "pch": [
+                        {
+                            "pn": "e_1002",
+                            "pch": [
+                                {
+                                    "pn": "e_A002",
+                                    "pch": [{"pn": "p_01", "pv": "00"}],
+                                },
+                                {
+                                    "pn": "e_3001",
+                                    "pch": [{"pn": "p_01", "pv": mode_value}],
+                                },
+                            ],
+                        }
+                    ],
+                },
+            },
+            {
+                "fr": "/dsiot/edge.adp_i",
+                "pc": {"pn": "adp_i", "pch": [{"pn": "mac", "pv": "112233445566"}]},
+            },
+        ]
+    }
+
+
+def test_off_unit_settings_go_to_its_operation_mode():
+    """While off, setpoint, fan, swing and vane changes are written for the mode
+    the unit runs in when it's turned back on, without turning it on."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+    device.values['mode'] = 'off'
+    device._operation_mode = 'hot'
+    settings = {'stemp': '22.0', 'f_rate': 'auto', 'f_dir': 'both'}
+
+    requests = []
+    device._handle_power_setting(settings, requests)
+    device._handle_temperature_setting(settings, requests)
+    device._handle_fan_setting(settings, requests)
+    device._handle_swing_setting(settings, requests)
+
+    assert [(r.name, r.value) for r in requests] == [
+        ("p_03", "2c"),  # heat setpoint, 22°C
+        ("p_0A", "0A00"),  # heat fan, auto
+        ("p_07", device.TURN_ON_SWING_AXIS),  # heat vertical swing
+        ("p_08", device.TURN_ON_SWING_AXIS),  # heat horizontal swing
+    ]
+
+    requests = []
+    device._handle_vane_setting({'vane_vertical': 'down'}, requests)
+    assert [(r.name, r.value) for r in requests] == [
+        ("p_07", device.REVERSE_VERTICAL_VANE_MAP['down'])
+    ]
+
+
+def test_off_unit_with_unknown_mode_sends_nothing(caplog):
+    """With no known mode to write to, the change is dropped with a warning."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+    device.values['mode'] = 'off'
+
+    requests = []
+    device._handle_temperature_setting({'stemp': '22.0'}, requests)
+
+    assert requests == []
+    assert "Mode of 127.0.0.1 is unknown while it's off" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_set_temperature_on_off_unit_is_sent():
+    """set() on an off unit sends the setpoint for its mode and no power write."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+    device._get_resource = AsyncMock(return_value=_off_unit_response("0100"))
+
+    await device.update_status()
+    assert device.values['mode'] == 'off'
+    assert device._settings_mode() == 'hot'
+
+    device._get_resource.reset_mock()
+    await device.set({'stemp': '22'})
+
+    payload = json.dumps(device._get_resource.call_args_list[0].kwargs["params"])
+    assert '"pn": "p_03", "pv": "2c"' in payload
+    assert '"e_A002"' not in payload  # power left alone
+    assert device.values['mode'] == 'off'
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     'method, args, message',
