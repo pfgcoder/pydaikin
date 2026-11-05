@@ -871,17 +871,18 @@ async def test_factory_brp072c_init_fails_falls_back(monkeypatch, client_session
     assert isinstance(device, DaikinBRP084)
 
 
-def test_extract_ip_port_from_discovery(monkeypatch):
-    """Port is taken from the discovery lookup when no port is in the id."""
-    monkeypatch.setattr(
-        "pydaikin.factory.get_name",
-        lambda name: {"ip": "10.0.0.5", "port": "30050", "name": name},
-    )
+@pytest.mark.parametrize(
+    "found",
+    [
+        {"ip": "10.0.0.5", "port": "30050", "name": "livingroom"},
+        {"ip": "10.0.0.5", "name": "livingroom"},
+    ],
+)
+def test_extract_ip_port_from_discovery(monkeypatch, found):
+    """Discovery gives the address; its reply's UDP port isn't the HTTP port."""
+    monkeypatch.setattr("pydaikin.factory.get_name", lambda name: found)
 
-    device_ip, port = DaikinFactory._extract_ip_port("livingroom")
-
-    assert device_ip == "10.0.0.5"
-    assert port == 30050
+    assert DaikinFactory._extract_ip_port("livingroom") == ("10.0.0.5", None)
 
 
 def test_extract_ip_port_discovery_error(monkeypatch):

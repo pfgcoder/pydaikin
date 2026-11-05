@@ -202,11 +202,12 @@ class DaikinFactory:  # pylint: disable=too-few-public-methods
         if port_match:
             return port_match.group(1), int(port_match.group(2))
 
-        # Try to look up device in discovery
+        # Try to look up device in discovery. Its "port" is the UDP port the
+        # reply came from, not the HTTP port, so it isn't used.
         try:
             device_name = get_name(device_id)
-            if device_name and 'port' in device_name:
-                return device_name['ip'], int(device_name['port'])
+            if device_name:
+                return device_name['ip'], None
         except (KeyError, ValueError, TypeError) as e:
             _LOGGER.debug("Error looking up device in discovery: %s", e)
 
