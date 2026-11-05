@@ -661,18 +661,7 @@ class DaikinBRP084(Appliance):
         if raw is not None:
             self.values["compressor_running"] = "1" if raw == "01" else "0"
 
-        # Outdoor-unit compressor temperature. A bad reading shows as unknown
-        # rather than keeping the last one.
-        try:
-            self.values['cmp_temp'] = str(
-                self.hex_le_to_temp(
-                    self.find_value_by_pn(response, *self.get_path("compressor_temp"))
-                )
-            )
-        except (TypeError, ValueError):  # null or not hex
-            self.values['cmp_temp'] = "--"
-        except DaikinException:
-            pass
+        self._extract_compressor_temp(response)
 
         # Decoded model strings.
         for key, path_key in (
@@ -685,6 +674,22 @@ class DaikinBRP084(Appliance):
                 )
             except DaikinException:
                 pass
+
+    def _extract_compressor_temp(self, response: dict) -> None:
+        """Read the outdoor unit's compressor temperature.
+
+        A bad reading shows as unknown rather than keeping the last one.
+        """
+        try:
+            self.values['cmp_temp'] = str(
+                self.hex_le_to_temp(
+                    self.find_value_by_pn(response, *self.get_path("compressor_temp"))
+                )
+            )
+        except (TypeError, ValueError):  # null or not hex
+            self.values['cmp_temp'] = "--"
+        except DaikinException:
+            pass
 
     async def _get_resource(self, path: str, params: Optional[Dict] = None):
         """Make the HTTP request to the device, retrying transient failures.
