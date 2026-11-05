@@ -1776,6 +1776,7 @@ async def test_update_status_auto_mode_missing_temp_setpoint(
     assert device.values['mac'] == '112233445566'
 
 
+@pytest.mark.asyncio
 async def test_update_status_dry_comfort_offset():
     """Dry comfort offset is exposed separately from target temperature."""
     device = DaikinBRP084("ip", session=MagicMock())
