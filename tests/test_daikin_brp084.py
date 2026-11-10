@@ -214,6 +214,7 @@ async def test_daikin_brp084(aresponses, client_session):
     assert device.values.get('otemp') == '17.0'
     assert device.values.get('f_dir') == 'off'
     assert device.swing_modes == ['Off', 'Vertical', 'Horizontal', '3D']
+    assert device.thermostat_on is None  # not in this fixture
     assert device.values.get('mac') == '112233445566'
     assert device.support_target_humidity is False
 
@@ -1552,6 +1553,52 @@ def test_swing_modes_follow_the_units_louvers():
 
     device._horizontal_swing = False
     assert device.swing_modes == ['Off', 'Vertical']
+
+
+def _e_3003_response(props):
+    """Build a minimal adr_0100 response with the given e_3003 properties."""
+    return {
+        "responses": [
+            {
+                "fr": "/dsiot/edge/adr_0100.dgc_status",
+                "pc": {
+                    "pn": "dgc_status",
+                    "pch": [
+                        {
+                            "pn": "e_1002",
+                            "pch": [
+                                {
+                                    "pn": "e_3003",
+                                    "pch": [
+                                        {"pn": pn, "pv": pv} for pn, pv in props.items()
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+
+
+@pytest.mark.parametrize('raw, expected', [("01", True), ("00", False)])
+def test_thermostat_on(raw, expected):
+    """The indoor unit's own flag says whether it's calling for heat."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+    device.values['mode'] = 'hot'
+
+    device._extract_optional_readings(_e_3003_response({"p_02": raw}))
+    assert device.thermostat_on is expected
+
+
+def test_thermostat_on_not_reported():
+    """A unit that doesn't report the flag gives None."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+    device.values['mode'] = 'hot'
+
+    device._extract_optional_readings(_e_3003_response({"p_1D": "00"}))
+    assert device.thermostat_on is None
 
 
 def test_swing_state_exception_returns_off():

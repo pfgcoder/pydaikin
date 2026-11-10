@@ -122,6 +122,11 @@ class DaikinBRP084(Appliance):
         "comfort": E_1002_E_3003_PATH + ["p_1D"],
         # Econo (e_3003/p_24): 00=off, 01=on. Verified live read+write.
         "econo": E_1002_E_3003_PATH + ["p_24"],
+        # Whether this indoor unit is calling for heat or cooling (e_3003/p_02):
+        # 01 while it works, 00 once it's satisfied, even while the shared
+        # outdoor unit keeps running for another indoor unit. Seen in heat on
+        # three indoor units.
+        "thermostat_on": E_1002_E_3003_PATH + ["p_02"],
         # Outdoor unit quiet (outdoor e_3002/p_3D): 00=off, 01=on.
         "outdoor_quiet": E_1003_PATH + ["e_3002", "p_3D"],
         # Powerful (outdoor e_3002/p_44): 00=off, 01=on. Verified live
@@ -643,6 +648,13 @@ class DaikinBRP084(Appliance):
         # Whether the unit has side-to-side swing, which decides the swing modes.
         self._horizontal_swing = self._has_horizontal_swing(response)
 
+        try:
+            self.values['thermostat_on'] = self.find_value_by_pn(
+                response, *self.get_path("thermostat_on")
+            )
+        except DaikinException:
+            pass
+
         # On/off feature toggles (comfort/econo/outdoor_quiet/powerful).
         for key in self.POWER_TOGGLES:
             try:
@@ -1070,6 +1082,18 @@ class DaikinBRP084(Appliance):
     async def set_comfort_mode(self, mode):
         """Enable or disable comfort airflow ('on'/'off')."""
         await self.set({'comfort': mode})
+
+    @property
+    def thermostat_on(self) -> Optional[bool]:
+        """Return whether this indoor unit is calling for heat or cooling.
+
+        Unlike the compressor, which belongs to the outdoor unit, this is the
+        indoor unit's own state. None if the unit doesn't report it.
+        """
+        value = self.values.get('thermostat_on')
+        if value is None:
+            return None
+        return value == '01'
 
     @property
     def support_comfort_mode(self) -> bool:
