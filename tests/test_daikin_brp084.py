@@ -703,6 +703,109 @@ def test_powerful_mutual_exclusion():
     assert by_name['p_44'] == '00'  # powerful cleared
 
 
+@pytest.mark.parametrize(
+    'mode, comfort, louver',
+    [
+        ('hot', 'on', ('p_07', '17000000')),
+        ('hot', 'off', ('p_07', '00000000')),
+        ('cool', 'on', ('p_05', '17000000')),
+        ('cool', 'off', ('p_05', '00000000')),
+    ],
+)
+def test_comfort_moves_the_louver(mode, comfort, louver):
+    """Comfort is written with the active mode's louver, as the remote does;
+    the unit ignores a comfort write on its own."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+    device.values.update({'mode': mode})
+
+    requests = []
+    device._handle_feature_toggles({'comfort': comfort}, requests)
+
+    assert [(r.name, r.value) for r in requests] == [
+        louver,
+        ('p_1D', '01' if comfort == 'on' else '00'),
+    ]
+    assert requests[0].path == ['e_1002', 'e_3001']
+
+
+def test_comfort_on_off_unit_uses_its_operation_mode():
+    """While off, the louver for the mode it starts in goes with comfort."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+    device.values['mode'] = 'off'
+    device._operation_mode = 'cool'
+
+    requests = []
+    device._handle_feature_toggles({'comfort': 'on'}, requests)
+
+    assert [(r.name, r.value) for r in requests] == [
+        ('p_05', '17000000'),
+        ('p_1D', '01'),
+    ]
+
+
+def test_comfort_leaves_an_explicit_louver_alone():
+    """A swing or vane change in the same call isn't overwritten."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+    device.values.update({'mode': 'hot'})
+
+    for extra in ({'f_dir': 'vertical'}, {'vane_vertical': 'swing'}):
+        requests = []
+        device._handle_feature_toggles({'comfort': 'on', **extra}, requests)
+        assert [(r.name, r.value) for r in requests] == [('p_1D', '01')]
+
+
+def test_powerful_clearing_comfort_moves_the_louver():
+    """Powerful turning comfort off also puts the louver back to neutral."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+    device.values.update({'mode': 'hot', 'comfort': 'on', 'powerful': 'off'})
+
+    requests = []
+    device._handle_feature_toggles({'powerful': 'on'}, requests)
+
+    assert [(r.name, r.value) for r in requests] == [
+        ('p_07', '00000000'),
+        ('p_44', '01'),
+        ('p_1D', '00'),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_set_comfort_sends_comfort_and_louver_together():
+    """Both go in one request, louver first, as in the write verified on a unit."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+    device.values.update({'mode': 'hot', 'comfort': 'off', 'powerful': 'off'})
+    device._get_resource = AsyncMock(return_value={})
+    device.update_status = AsyncMock()
+
+    await device.set_comfort_mode('on')
+
+    device._get_resource.assert_awaited_once()
+    payload = device._get_resource.await_args.kwargs['params']
+    assert payload == {
+        'requests': [
+            {
+                'op': 3,
+                'to': '/dsiot/edge/adr_0100.dgc_status',
+                'pc': {
+                    'pn': 'dgc_status',
+                    'pch': [
+                        {
+                            'pn': 'e_1002',
+                            'pch': [
+                                {
+                                    'pn': 'e_3001',
+                                    'pch': [{'pn': 'p_07', 'pv': '17000000'}],
+                                },
+                                {'pn': 'e_3003', 'pch': [{'pn': 'p_1D', 'pv': '01'}]},
+                            ],
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+
+
 def test_handle_vane_setting():
     """Discrete vertical vane writes the mode-specific property."""
     mock_session = MagicMock()

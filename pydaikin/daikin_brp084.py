@@ -265,6 +265,12 @@ class DaikinBRP084(Appliance):
     # On/off feature toggles handled together (share mutual-exclusion rules).
     POWER_TOGGLES = ('comfort', 'econo', 'outdoor_quiet', 'powerful')
 
+    # Vertical louver to write with comfort on ('01') and off ('00'). A comfort
+    # write on its own is acknowledged but ignored by the unit. The remote sets
+    # the active mode's louver with it, and so must we. Verified on a unit in
+    # heat (louver down) and cool (louver up); off leaves it neutral.
+    COMFORT_VANE = {'01': '17000000', '00': '00000000'}
+
     VALUES_TRANSLATION = {}
     VALUES_SUMMARY = []
     # BRP084 polls all status via its own update_status (JSON multireq), so no
@@ -901,7 +907,8 @@ class DaikinBRP084(Appliance):
         the hardware mutual-exclusion documented in the unit's manual: Powerful
         and {Comfort, Econo, Outdoor Quiet} cannot be active at the same time,
         so enabling one side clears the other (mirroring the remote's
-        last-button-pressed-wins behaviour).
+        last-button-pressed-wins behaviour). A comfort change also moves the
+        vertical louver (see _handle_comfort_vane).
         """
         requested = {}
         for key in self.POWER_TOGGLES:
@@ -925,8 +932,27 @@ class DaikinBRP084(Appliance):
             if self.values.get('powerful') == 'on' and 'powerful' not in requested:
                 requested['powerful'] = '00'
 
+        # Louver before comfort, the order verified on a unit: on the remote,
+        # moving the louver cancels comfort, so it mustn't come second.
+        if 'comfort' in requested:
+            self._handle_comfort_vane(settings, requested['comfort'], requests)
+
         for key, raw in requested.items():
             self.add_request(requests, self.get_path(key), raw)
+
+    def _handle_comfort_vane(self, settings, comfort_raw, requests):
+        """Write the louver that goes with a comfort change.
+
+        Skipped when the same call sets swing or the vane itself, so the
+        louver isn't written twice.
+        """
+        if 'f_dir' in settings or 'vane_vertical' in settings:
+            return
+        mode = self._settings_mode()
+        if mode not in self.API_PATHS["swing_settings"]:
+            return
+        path = self.get_path("swing_settings", mode, "vertical")
+        self.add_request(requests, path, self.COMFORT_VANE[comfort_raw])
 
     def _handle_vane_setting(self, settings, requests):
         """Handle discrete vertical vane position settings.
