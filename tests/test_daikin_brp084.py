@@ -213,6 +213,7 @@ async def test_daikin_brp084(aresponses, client_session):
     assert device.values.get('htemp') == '24.0'
     assert device.values.get('otemp') == '17.0'
     assert device.values.get('f_dir') == 'off'
+    assert device.swing_modes == ['Off', 'Vertical', 'Horizontal', '3D']
     assert device.values.get('mac') == '112233445566'
     assert device.support_target_humidity is False
 
@@ -1518,6 +1519,39 @@ def test_swing_state(vertical, horizontal, expected):
 
     result = device.get_swing_state(_swing_state_response(vertical, horizontal))
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    'vertical, horizontal, expected',
+    [
+        ("0F0000", "000000", True),
+        (None, "0F0000", True),
+        # Read from a vertical-only unit: no horizontal property in any mode
+        ("0F000000", None, False),
+        (None, None, False),
+    ],
+)
+def test_has_horizontal_swing(vertical, horizontal, expected):
+    """A unit has side-to-side swing only if it reports the property."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+
+    response = _swing_state_response(vertical, horizontal)
+    assert device._has_horizontal_swing(response) is expected
+
+
+def test_swing_modes_follow_the_units_louvers():
+    """Side-to-side swing modes are listed only for units that have them."""
+    device = DaikinBRP084('127.0.0.1', session=MagicMock())
+    all_modes = ['Off', 'Vertical', 'Horizontal', '3D']
+
+    # Unknown before the first status update: list everything
+    assert device.swing_modes == all_modes
+
+    device._horizontal_swing = True
+    assert device.swing_modes == all_modes
+
+    device._horizontal_swing = False
+    assert device.swing_modes == ['Off', 'Vertical']
 
 
 def test_swing_state_exception_returns_off():

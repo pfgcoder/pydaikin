@@ -310,6 +310,9 @@ class DaikinBRP084(Appliance):
         # The mode the unit runs in when on. The adapter reports it even while
         # the unit is off, when values['mode'] is 'off'.
         self._operation_mode: Optional[str] = None
+        # Whether the unit has a side-to-side swing setting; None until the
+        # first status update.
+        self._horizontal_swing: Optional[bool] = None
 
     @staticmethod
     def hex_to_temp(value: str, divisor=2) -> float:
@@ -409,6 +412,31 @@ class DaikinBRP084(Appliance):
         except DaikinException:
             return False
         return "F" in (value or "")
+
+    def _has_horizontal_swing(self, data: dict) -> bool:
+        """Return whether the unit reports a side-to-side swing setting.
+
+        Units whose louvers only swing up and down have no horizontal property
+        in any mode.
+        """
+        for mode in self.API_PATHS["swing_settings"]:
+            try:
+                self.find_value_by_pn(
+                    data, *self.get_path("swing_settings", mode, "horizontal")
+                )
+            except DaikinException:
+                continue
+            return True
+        return False
+
+    @property
+    def swing_modes(self) -> list:
+        """Return the swing modes, leaving out side-to-side ones if the unit
+        has no side-to-side swing."""
+        modes = super().swing_modes
+        if self._horizontal_swing is False:
+            return [mode for mode in modes if mode.lower() in ('off', 'vertical')]
+        return modes
 
     def get_swing_state(self, data: dict) -> str:
         """Get the current swing state from response data."""
@@ -612,6 +640,9 @@ class DaikinBRP084(Appliance):
         Each read is guarded individually so a missing container just leaves
         that value unset rather than failing the whole status update.
         """
+        # Whether the unit has side-to-side swing, which decides the swing modes.
+        self._horizontal_swing = self._has_horizontal_swing(response)
+
         # On/off feature toggles (comfort/econo/outdoor_quiet/powerful).
         for key in self.POWER_TOGGLES:
             try:
